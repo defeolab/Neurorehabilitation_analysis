@@ -1,0 +1,42 @@
+Multiple Choice Matrix
+Question ID	Neutral
+Headline	
+Allow multiple choice	NO
+Number of Categories	10
+Number of Questions	1
+Attached to stimulus	happiness1
+LABEL ID	LABEL TEXT	LABEL VALUE
+Label1	1	1
+Label2	2	2
+Label3	3	3
+Label4	4	4
+Label5	5	5
+Label6	6	6
+Label7	7	7
+Label8	8	8
+Label9	9	9
+Label10	10	10
+QUESTION ID	QUESTION TEXT
+Question1	Neutral
+
+STUDY	RESPONDENT	GENDER	AGE	GROUP	Question1.LABELID	Question1.LABELTEXT	Question1.LABELVALUE	Question1.TIMING	
+Image experiment _Copy 12-09-22 12h38m15	zeel	FEMALE	24	Default	Label1	1		
+Image experiment _Copy 12-09-22 12h38m15	zeel	FEMALE	24	Default	Label2	2		
+Image experiment _Copy 12-09-22 12h38m15	zeel	FEMALE	24	Default	Label3	3		
+Image experiment _Copy 12-09-22 12h38m15	zeel	FEMALE	24	Default	Label4	4		
+Image experiment _Copy 12-09-22 12h38m15	zeel	FEMALE	24	Default	Label5	5		
+Image experiment _Copy 12-09-22 12h38m15	zeel	FEMALE	24	Default	Label6	6		
+Image experiment _Copy 12-09-22 12h38m15	zeel	FEMALE	24	Default	Label7	7		
+Image experiment _Copy 12-09-22 12h38m15	zeel	FEMALE	24	Default	Label8	8		
+Image experiment _Copy 12-09-22 12h38m15	zeel	FEMALE	24	Default	Label9	9		
+Image experiment _Copy 12-09-22 12h38m15	zeel	FEMALE	24	Default	Label10	10		
+Image experiment _Copy 12-09-22 12h38m15	Sylwia	FEMALE	22	Default	Label1	1		
+Image experiment _Copy 12-09-22 12h38m15	Sylwia	FEMALE	22	Default	Label2	2		
+Image experiment _Copy 12-09-22 12h38m15	Sylwia	FEMALE	22	Default	Label3	3		
+Image experiment _Copy 12-09-22 12h38m15	Sylwia	FEMALE	22	Default	Label4	4		
+Image experiment _Copy 12-09-22 12h38m15	Sylwia	FEMALE	22	Default	Label5	5		
+Image experiment _Copy 12-09-22 12h38m15	Sylwia	FEMALE	22	Default	Label6	6		
+Image experiment _Copy 12-09-22 12h38m15	Sylwia	FEMALE	22	Default	Label7	7		
+Image experiment _Copy 12-09-22 12h38m15	Sylwia	FEMALE	22	Default	Label8	8		
+Image experiment _Copy 12-09-22 12h38m15	Sylwia	FEMALE	22	Default	Label9	9		
+Image experiment _Copy 12-09-22 12h38m15	Sylwia	FEMALE	22	Default	Label10	10		
