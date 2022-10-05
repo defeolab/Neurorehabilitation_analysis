@@ -1,0 +1,284 @@
+---
+title: Raw Data Aggregation
+description: Aggregation of all raw data signals by stimulus.
+helpUrl: https://go.imotions.com/R_RawDataAggregation
+params:
+  token: "xxxxx"
+  studyId: "xxxxx"
+  stimulusId: "xxxxx"
+  segmentId: "xxxxx"
+  selectedSensorName: ""
+output:
+  html_document:
+    df_print: kable
+    code_folding: hide
+    code_download: true
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, results = "asis")
+
+library(imotionsData)
+library(data.table)
+library(dplyr)
+```
+
+```{r, purl = TRUE}
+# write results back to the Imotions server
+upload_data <- T
+start_time <- Sys.time()
+
+warningHtml <- function(text) {
+    cat("<div class='alert alert-warning'><span class='glyphicon glyphicon-flash'></span> ", paste("Warning:", text),
+        "</div>\n")
+}
+```
+
+```{r, purl = FALSE}
+studyId <- params$studyId
+stimulusId <- params$stimulusId
+segmentId <- params$segmentId
+selectedSensorName <- params$selectedSensorName
+
+connection <- connectRemote(params$token)
+study <- getStudy(connection = connection, studyId = studyId)
+respondents <- listStimulusRespondents(connection, studyId, stimulusId)
+segments <- listSegments(connection, studyId)
+segmentRespondentsId <- segments[segments$id == segmentId, ]$respondents[[1]]$id
+segmentStimulusRespondentsId <- intersect(respondents$id, segmentRespondentsId)
+segmentRespondents <- respondents[respondents$id %in% segmentStimulusRespondentsId, ]
+
+studyName <- study$name
+
+stimulus <- getStimulus(connection, studyId, stimulusId)
+stimulusName <- stimulus$name
+segmentName <- segments[segments$id == segmentId, ]$name
+
+if (length(segmentStimulusRespondentsId) < 2) {
+    warningHtml("You need at least two respondents in the segment to compute the aggregated signal.")
+    knitr::knit_exit()
+}
+
+```
+
+#### Study: ``r studyName``
+#### Stimulus: ``r stimulusName``
+#### Segment: ``r segmentName``
+
+--- 
+
+### Methods
+
+This R Notebook aggregates the raw signal data by stimulus across respondents.
+
+* First, the data of all available respondents of the specified sensor and stimulus are retrieved. The raw data aggregation algorithm will be run for each signal channel of the selected sensor.
+
+* Within each signal channel, the mean signal across all respondents of the specified stimulus are calculated and stored. The generated time-series mean signal is the aggregated signal. And you can view this aggregated signal in the desktop replay.
+
+***
+
+**Note:** The R Notebook will not be executed if there is only one respondent or no respondents available for aggregation.
+
+```{r, purl = FALSE}
+sensorSensor <- unlist(strsplit(selectedSensorName, "||", fixed = T))[1]
+sensorName <- unlist(strsplit(selectedSensorName, "||", fixed = T))[2]
+sensorInstance <- unlist(strsplit(selectedSensorName, "||", fixed = T))[3]
+
+if (is.na(sensorInstance)) {
+  sensorInstance <- ""
+}
+
+#' Retrieve the raw data for a given sensor and resample it (based on the sampling rate of the first respondent)
+#'
+#' @param respondent the respondent from which the data must be retrieved
+#'
+#' @return the raw data with resampled timestamps (from the specified respondent/sensor combination)
+#'           ready for aggregation
+retrieveData <- function(respondent) {
+    message(paste(rownames(respondent), "/", nrow(segmentRespondents), " ", respondent$label))
+    message(paste("Sensor used:", selectedSensorName))
+
+    samples <- tryCatch({
+        listRespondentSamples(connection, studyId, stimulusId, respondent$id)
+    }
+    , error = function(e) {
+        message(paste("Could not retrieve samples for respondent", respondent$id))
+        return(NULL)
+    })
+
+    nameIdx <- sensorName == samples$name
+    instanceIdx <- sensorInstance == samples$instance
+
+    if (sum(nameIdx & instanceIdx, na.rm = T) != 1) {
+        message(paste("Could not retrieve data for respondent", respondent$id))
+        return(NULL)
+    }
+
+    sampleId <- samples[nameIdx & instanceIdx, "id"]
+    slideId <- samples[samples$name == "SlideEvent", ]$id
+
+    # In a case getSampleData failed because of empty signal. Adding tryCatch.
+    signals <- setDT(getSampleData(connection, studyId, stimulusId, respondentId = respondent$id, sampleId = sampleId))
+    signals$TimeStamp <- as.numeric(signals$TimeStamp)
+
+    if (is.null(signals)) {
+        return(NULL)
+    }
+
+    slideEvent <- getSampleData(connection, studyId, stimulusId, respondentId = respondent$id, sampleId = slideId)
+    startMedia <- slideEvent$TimeStamp[slideEvent$EventType == "StartMedia"]
+    endMedia <- slideEvent$TimeStamp[slideEvent$EventType == "EndMedia"]
+
+    signals <- signals[TimeStamp >= startMedia & TimeStamp <= endMedia,
+                       setdiff(names(signals), c("EventSource", "SampleNumber")), with = F]
+
+    fragments <- data.frame(TimeStamp = startMedia, Duration = endMedia - startMedia)
+
+    if ("SceneFragment" %in% samples$name) {
+      fragments <- getSampleData(connection, studyId, stimulusId, respondentId = respondent$id,
+                                 sampleId = samples[samples$name == "SceneFragment", "id"])
+    }
+
+    # in case of multiple scene fragments, they all need to be concatenated (else we just remove the mediaTime start)
+    invisible(lapply(seq(nrow(fragments)), function(x) {
+        signals[TimeStamp >= fragments[x, ]$TimeStamp & TimeStamp <= fragments[x, ]$TimeStamp + fragments[x, ]$Duration,
+                TimeStamp := TimeStamp - fragments[x, ]$TimeStamp + sum(fragments[0:(x - 1), ]$Duration)]
+        }))
+
+    message("Signal aggregation...")
+
+    # in case of Empatica device we need to create artificial timestamps
+    if (median(diff(signals$TimeStamp)) == 0) {
+        estimatedSampleRate <- 1000 / mean(diff(signals$TimeStamp))
+        signals$TimeStamp <- signals$TimeStamp[1] + (1000 / estimatedSampleRate) * seq(0, nrow(signals) - 1)
+    }
+
+    # in case of Affectiva / FACET we also need to correct timestamps
+    if (sensorSensor == "Affectiva AFFDEX" || sensorSensor == "Emotient FACET") {
+        estimatedSampleRate <- 30
+        signals$TimeStamp <- signals$TimeStamp[1] + (1000 / estimatedSampleRate) * seq(0, nrow(signals) - 1)
+    }
+
+    # all respondents will use the same sampling rate - based on the first respondent
+    if (!exists("aggregatedSampleRate")) {
+        aggregatedSampleRate <<- round(1000 / median(diff(signals$TimeStamp)))
+    }
+
+    resampledSignal <- data.table(TimeStamp = seq((1000 / aggregatedSampleRate) / 2, sum(fragments$Duration),
+                                                  by = 1000 / aggregatedSampleRate), Respondent = respondent$id)
+
+    setkey(resampledSignal, "TimeStamp")
+    setkey(signals, "TimeStamp")
+
+    resampledSignal <- signals[resampledSignal, roll = "nearest", rollends = T]
+    return(resampledSignal)
+}
+
+rownames(segmentRespondents) <- seq(nrow(segmentRespondents))
+
+# Run through all respondents and merge raw data
+aggSignals <- do.call(bind_rows, by(segmentRespondents, seq(nrow(segmentRespondents)), retrieveData))
+setorder(aggSignals, "TimeStamp")
+
+
+# Remove columns which are always empty in Eyetracker data
+aggSignals <- aggSignals[, colSums(is.na(aggSignals)) < nrow(aggSignals), with = F]
+
+# Aggregate data and compute falloff curve
+aggSignals <- aggSignals[, c(lapply(.SD[, !"Respondent"], mean, na.rm = T), .(Falloff = length(unique(Respondent)))),
+                         by = c("TimeStamp")]
+
+# Eyetracker sensors behave a bit differently than the other sensors as most of their channels are hidden
+if (sensorSensor == "Eyetracker") {
+    if ("ET_Distance3D" %in% colnames(aggSignals)) {
+       #Tobii glasses detected
+       aggSignals <- aggSignals[, c("TimeStamp", "ET_PupilLeft", "ET_PupilRight", "ET_AccX", "ET_AccY", "ET_AccZ",
+                                    "ET_GyroX", "ET_GyroY", "ET_GyroZ", "ET_Distance3D", "Falloff")]
+
+       aggSignals <- aggSignals[, `:=`(Pupil = rowMeans(.SD[, c("ET_PupilLeft", "ET_PupilRight")], na.rm = T))]
+
+       colnames(aggSignals) <- c("TimeStamp", "Pupil Left", "Pupil Right", "Acc X", "Acc Y", "Acc Z", "Gyro X",
+                                 "Gyro Y", "Gyro Z", "Distance 3D", "Falloff", "Pupil")
+    } else {
+       aggSignals <- aggSignals[, c("TimeStamp", "ET_PupilLeft", "ET_PupilRight", "ET_DistanceLeft", "ET_DistanceRight",
+                                    "Falloff")]
+
+       aggSignals <- aggSignals[, `:=`(Distance = rowMeans(.SD[, c("ET_DistanceLeft", "ET_DistanceRight")], na.rm = T),
+                                       Pupil = rowMeans(.SD[, c("ET_PupilLeft", "ET_PupilRight")], na.rm = T))]
+
+       colnames(aggSignals) <- c("TimeStamp", "Pupil Left", "Pupil Right", "Distance Left", "Distance Right", "Falloff",
+                                 "Distance", "Pupil")
+    }
+}
+
+# We need to hide some of the channels that we get out of FACET
+if (sensorSensor == "Emotient FACET") {
+    emotion <- c("Anger", "Sadness", "Disgust", "Joy", "Surprise", "Fear", "Contempt", "Confusion", "Frustration")
+
+    valence <- c("Positive", "Negative", "Neutral")
+
+    AUnit <- c("AU1", "AU2", "AU4", "AU5", "AU6", "AU7", "AU9", "AU10", "AU12", "AU14", "AU15", "AU17", "AU18",
+               "AU20", "AU23", "AU24", "AU25", "AU26", "AU28", "AU43")
+
+    channels <- c(emotion, AUnit, valence, "Falloff")
+
+    signalIdx <- c(1, unlist(sapply(channels, function(x) grep(paste0(x, "$"), names(aggSignals)))))
+    aggSignals <- aggSignals[, ..signalIdx]
+}
+
+
+# For external data the sensor name need to be used instead of the instance (Enobio/Empatica)
+if (sensorInstance == "" || sensorSensor == "Lab Streaming Layer" || sensorSensor == "B-Alert" ||
+    sensorSensor == "Emotiv Cortex" || sensorSensor == "ActiCHamp") {
+    sensorInstance <- sensorName
+}
+
+if (is.null(aggSignals) || nrow(aggSignals) == 0) {
+    warningHtml("No raw data detected.")
+} else {
+    aggSignals$TimeStamp <- as.integer(aggSignals$TimeStamp)
+
+    # data upload aggregated signals
+    if (upload_data) {
+        res <- uploadSampleData(connection, studyId, stimulusId, paste0("Aggregated Raw Data (", sensorInstance, ")"),
+                                segmentId = segmentId, data = aggSignals[, !c("Falloff")], overwrite = TRUE)
+
+        resFalloff <- uploadSampleData(connection, studyId, stimulusId, paste0("Falloff (", sensorInstance, ")"),
+                                       segmentId = segmentId, data = aggSignals[, c("TimeStamp", "Falloff")],
+                                       overwrite = TRUE)
+    }
+}
+```
+
+
+```{r, purl = FALSE}
+
+end_time <- Sys.time()
+time_taken <- end_time - start_time
+```
+
+*Computation started at `r format(start_time, usetz = TRUE)` / Notebook execution time: `r format(time_taken)`*
+
+
+```{r license, echo = FALSE}
+# The contents of this notebook are licensed under the MIT license:
+# Copyright (c) 2018 iMotions
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+```
